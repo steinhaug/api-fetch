@@ -1,0 +1,213 @@
+# Document 1: Return Value Specification
+## WebFetch API — From the Consumer's Perspective (Claude)
+
+> This document defines the **immutable contract** for what `search()` and `fetch()` must return.
+> Claude Code must not alter these structures. All fields marked **required** must always be present.
+> Optional fields must be present as `null` if not populated — never omitted.
+
+---
+
+## 1. `search(terms, date_from, date_to, max_results, domains, exclude_domains)`
+
+### Return structure
+
+```json
+{
+  "query": "Elon Musk Tesla board resignation",
+  "cached": true,
+  "cached_at": "2026-06-27T14:32:00Z",
+  "result_count": 12,
+  "results": [
+    {
+      "rank": 1,
+      "url": "https://reuters.com/business/tesla-board-2026-06-25/",
+      "domain": "reuters.com",
+      "title": "Tesla board member resigns amid shareholder pressure",
+      "published_date": "2026-06-25",
+      "highlight": "Board member John Doe submitted resignation letter citing...",
+      "source_tier": "tier1",
+      "is_premium_source": false,
+      "fetch_available": true
+    }
+  ],
+  "error": null
+}
+```
+
+### Field definitions
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | ✅ | The original search terms as submitted |
+| `cached` | bool | ✅ | Whether result came from cache |
+| `cached_at` | ISO datetime | ✅ | When this search was cached |
+| `result_count` | int | ✅ | Total results returned |
+| `results[].rank` | int | ✅ | Position in result set (1-based) |
+| `results[].url` | string | ✅ | Full URL |
+| `results[].domain` | string | ✅ | Bare domain (e.g. `reuters.com`) |
+| `results[].title` | string | ✅ | Page title |
+| `results[].published_date` | date or null | ✅ | ISO date. `null` if unknown |
+| `results[].highlight` | string or null | ✅ | Excerpt most relevant to query |
+| `results[].source_tier` | string | ✅ | `tier1`, `tier2`, or `unknown` (see Source Tiers below) |
+| `results[].is_premium_source` | bool | ✅ | True if from configured premium/authenticated source list |
+| `results[].fetch_available` | bool | ✅ | Whether `fetch()` can be called on this URL |
+| `error` | string or null | ✅ | Error message if search failed, else `null` |
+
+### Source Tiers
+
+```
+tier1: reuters.com, apnews.com, ft.com, bloomberg.com, wsj.com,
+       washingtonpost.com, nytimes.com, bbc.com, economist.com,
+       sec.gov, federalreserve.gov (official/government sources)
+
+tier2: All other recognized news outlets and publications
+
+unknown: Blogs, forums, aggregators, unrecognized domains
+```
+
+---
+
+## 2. `fetch(url, return_type, cache_reload, max_age_hours)`
+
+### Return structure
+
+```json
+{
+  "url": "https://reuters.com/business/tesla-board-2026-06-25/",
+  "domain": "reuters.com",
+  "title": "Tesla board member resigns amid shareholder pressure",
+  "published_date": "2026-06-25",
+  "author": "Jane Smith",
+  "fetch_mode": "httpx",
+  "cached": true,
+  "cached_at": "2026-06-27T14:35:00Z",
+  "cache_age_hours": 0.5,
+  "page_size_chars": 18400,
+  "return_type": "summary",
+  "content": {
+    "summary": "Tesla board member John Doe resigned on June 25th citing...",
+    "text": null,
+    "links": null
+  },
+  "meta": {
+    "source_tier": "tier1",
+    "is_premium_source": false,
+    "fetch_mode_reason": "httpx_success"
+  },
+  "error": null
+}
+```
+
+### Field definitions
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `url` | string | ✅ | Canonical URL fetched |
+| `domain` | string | ✅ | Bare domain |
+| `title` | string or null | ✅ | Page title extracted from HTML |
+| `published_date` | date or null | ✅ | ISO date. `null` if not found |
+| `author` | string or null | ✅ | Byline if extractable, else `null` |
+| `fetch_mode` | string | ✅ | `httpx` or `playwright` |
+| `cached` | bool | ✅ | Whether content came from cache |
+| `cached_at` | ISO datetime | ✅ | When this page was cached |
+| `cache_age_hours` | float | ✅ | Age of cached content in hours |
+| `page_size_chars` | int | ✅ | Size of stripped text in characters |
+| `return_type` | string | ✅ | Echo of requested return_type: `summary`, `text`, `text+links` |
+| `content.summary` | string or null | ✅ | Present when return_type is `summary` or `text+links` |
+| `content.text` | string or null | ✅ | Present when return_type is `text` or `text+links` |
+| `content.links` | array or null | ✅ | Present when return_type is `text+links` |
+| `meta.source_tier` | string | ✅ | Same tier definition as search() |
+| `meta.is_premium_source` | bool | ✅ | From authenticated source list |
+| `meta.fetch_mode_reason` | string | ✅ | Why this fetch mode was chosen (see below) |
+| `error` | string or null | ✅ | Error message if fetch failed, else `null` |
+
+### `fetch_mode_reason` values
+
+```
+httpx_success         — httpx worked, no fallback needed
+httpx_empty_body      — httpx returned empty/JS-only body, fell back to Playwright
+httpx_403             — blocked, fell back to Playwright
+httpx_429             — rate limited, fell back to Playwright
+playwright_default    — domain is on forced-Playwright list
+playwright_auth       — domain requires authenticated Chrome session
+```
+
+---
+
+## 3. Link objects (when `return_type` includes links)
+
+```json
+{
+  "url": "https://sec.gov/Archives/edgar/data/...",
+  "anchor_text": "Q1 2026 10-K Filing",
+  "domain": "sec.gov",
+  "source_quality": "high",
+  "link_type": "primary_source"
+}
+```
+
+### Link quality classification
+
+| `source_quality` | Criteria |
+|---|---|
+| `high` | Domain is tier1, or link points to official document (SEC, government, court filing) |
+| `medium` | Domain is tier2, or recognized news outlet |
+| `low` | Unknown domain, blog, forum |
+| `filtered` | Navigation, social media, ads — **never returned** |
+
+### `link_type` values
+
+```
+primary_source    — SEC filings, government docs, official press releases
+cross_reference   — Same story on another outlet
+background        — Related article on same domain
+external          — Outbound link to different domain, purpose unclear
+```
+
+### Links that are ALWAYS filtered (never appear in output)
+
+```
+- /tag/, /category/, /author/, /search, /archive
+- ?utm_*, #section-anchors used for navigation
+- subscribe, newsletter, login, signin, register
+- facebook.com, twitter.com, x.com, instagram.com, linkedin.com
+- javascript:, mailto:, tel:
+- CDN domains, image hosts, analytics scripts
+- Any URL where domain == same as fetched page AND path matches nav patterns
+```
+
+---
+
+## 4. Error responses
+
+Both functions return errors in-band (never raise exceptions to caller):
+
+```json
+{
+  "url": "https://example.com/article",
+  "error": "fetch_failed: httpx 403, playwright timeout after 30s",
+  "content": null,
+  "cached": false
+}
+```
+
+Possible error strings:
+
+```
+fetch_failed: [reason]
+search_failed: [reason]  
+cache_read_error: [reason]
+parse_failed: trafilatura and bs4 both returned empty
+timeout: [mode] exceeded [N]s
+```
+
+---
+
+## 5. What Claude will do with these structures
+
+- **`search()` results**: Read `source_tier` and `published_date` to decide which URLs are worth calling `fetch()` on. Never fetch all results blindly.
+- **`fetch()` summary**: Used for quick fact-checking and initial assessment.
+- **`fetch()` text**: Used when full context is needed for analysis.
+- **`fetch()` text+links**: Used when Claude wants to follow the evidence trail — high-quality links will be candidates for further `fetch()` calls.
+- **`cache_age_hours`**: Claude will request `cache_reload=true` or set `max_age_hours` tighter when freshness is critical (breaking news, financial data).
+- **`error` field**: Claude handles gracefully — logs it and tries next result. Never crashes a research session on a single fetch failure.
