@@ -80,6 +80,31 @@ def test_relative_urls_resolved():
     )
 
 
+def test_nav_noise_filtered():
+    """Same-domain nav/section links and empty anchors are dropped; real
+    article links (same-domain slug + cross-domain) are kept."""
+    html = """
+    <body>
+      <a href="/world">World</a>
+      <a href="/world/africa">Africa</a>
+      <a href="/">Skip to main content</a>
+      <a href="/world/middle-east/iran-strike-2026-06-26/">Iran strike story</a>
+      <a href="https://reuters.com/business/vw-cuts-2026-06-26/">VW cuts</a>
+      <a href="https://example.com/empty"></a>
+    </body>"""
+    _, raw = strip_markup(html)
+    links = extract_links("https://example.com/news/", raw)
+    urls = [link["url"] for link in links]
+    assert "https://example.com/world" not in urls
+    assert "https://example.com/world/africa" not in urls
+    assert not any(u.rstrip("/") == "https://example.com" for u in urls)
+    assert "https://example.com/empty" not in urls  # empty anchor
+    assert "https://example.com/news/world/middle-east/iran-strike-2026-06-26" in [
+        u.rstrip("/") for u in urls
+    ] or any("iran-strike" in u for u in urls)
+    assert any("reuters.com/business/vw-cuts" in u for u in urls)
+
+
 def test_link_cap():
     """100 valid links are capped at 50 in the output."""
     anchors = "".join(

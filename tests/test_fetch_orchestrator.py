@@ -226,6 +226,33 @@ def test_login_wall_not_logged_for_full_article(monkeypatch, tmp_path):
         _cleanup(url)
 
 
+def test_author_from_meta_byl():
+    """NYT-style <meta name='byl'> populates author."""
+    html = '<html><head><meta name="byl" content="By Jane Reporter"></head><body><p>x</p></body></html>'
+    _, author, _ = fo._extract_metadata(html)
+    assert author == "By Jane Reporter"
+
+
+def test_author_from_json_ld():
+    """schema.org JSON-LD author.name populates author."""
+    html = """
+    <html><head><script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"NewsArticle",
+     "author":{"@type":"Person","name":"Maria Author"}}
+    </script></head><body><p>x</p></body></html>"""
+    _, author, _ = fo._extract_metadata(html)
+    assert author == "Maria Author"
+
+
+def test_author_from_body_text_fallback():
+    """A 'Reporting by ...' byline in the body is picked up when no meta tag."""
+    text = (
+        "BERLIN, June 26 (Reuters) - Some article body here about cars.\n"
+        "Reporting by Thomas Seythal and Christina Amann; Editing by Nick Carey"
+    )
+    assert fo._byline_from_text(text) == "Thomas Seythal"
+
+
 def test_error_response_structure(monkeypatch):
     url = _url()
     _cleanup(url)

@@ -74,6 +74,31 @@ def _source_quality(domain: str) -> str:
     return "low"
 
 
+def _is_nav_noise(parsed, domain: str, base_domain: str, base_path: str) -> bool:
+    """True if a same-domain link is a nav/section/menu entry, not an article.
+
+    Cross-domain links are always kept (they carry cross-reference value). For
+    same-domain links we keep only article-like URLs. Section landing pages use
+    short hyphenated category slugs (``/business/autos-transportation``) with no
+    digits, whereas real articles carry a date or numeric id somewhere in the
+    path (``...-2026-06-26``, ``/2026/06/26/...``) or a long slug. Self-links to
+    the current page are also dropped. This keeps nav chrome from filling the
+    50-link cap and crowding out genuine cross-references.
+    """
+    if domain != base_domain:
+        return False
+    path = parsed.path.rstrip("/")
+    if not path:
+        return True  # the domain root itself
+    if path == base_path:
+        return True  # a link back to the page we are reading
+    segments = [s for s in path.split("/") if s]
+    last = segments[-1] if segments else ""
+    has_digit = any(c.isdigit() for c in path)
+    is_article = has_digit or len(last) >= 30
+    return not is_article
+
+
 def _link_type(domain: str, base_domain: str) -> str:
     """Classify the relationship of a link to the page it was found on."""
     if domain in config.PRIMARY_SOURCE_DOMAINS:
@@ -93,12 +118,20 @@ def extract_links(base_url: str, raw_links: list[dict]) -> list[dict]:
     (navigation, social, ads) and non-http(s) schemes are dropped entirely.
     """
     base_domain = domain_of(base_url)
+    base_path = urlparse(base_url).path.rstrip("/")
     seen: set[str] = set()
     links: list[dict] = []
 
     for raw in raw_links:
-        href = raw.get("href", "")
+        href = (raw.get("href") or "").strip()
         if not href:
+            continue
+        # Pure in-page anchors ("#main-content") are not real links.
+        if href.startswith("#"):
+            continue
+        anchor = (raw.get("anchor_text") or "").strip()
+        # A link with no readable anchor text is low value (and usually chrome).
+        if not anchor:
             continue
         absolute = urljoin(base_url, href)
         parsed = urlparse(absolute)
@@ -108,15 +141,18 @@ def extract_links(base_url: str, raw_links: list[dict]) -> list[dict]:
             continue
         if absolute in seen:
             continue
-        seen.add(absolute)
 
         domain = domain_of(absolute)
         if not domain:
             continue
+        if _is_nav_noise(parsed, domain, base_domain, base_path):
+            continue
+        seen.add(absolute)
+
         links.append(
             {
                 "url": absolute,
-                "anchor_text": raw.get("anchor_text", ""),
+                "anchor_text": anchor,
                 "domain": domain,
                 "source_quality": _source_quality(domain),
                 "link_type": _link_type(domain, base_domain),

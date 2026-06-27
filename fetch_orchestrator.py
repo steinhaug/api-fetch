@@ -9,6 +9,7 @@ fetch failures come back as the full §4 error shape with `error` set.
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -61,6 +62,107 @@ def _is_premium(domain: str) -> bool:
     return any(domain == d or domain.endswith("." + d) for d in config.PREMIUM_SOURCES)
 
 
+def _clean_name(value) -> str | None:
+    """Trim a candidate author string; reject empties, URLs, and over-long blobs."""
+    if not value or not isinstance(value, str):
+        return None
+    name = value.strip()
+    if not name or name.startswith("http") or len(name) > 120:
+        return None
+    return name
+
+
+def _ld_author(data) -> str | None:
+    """Pull an author name out of a JSON-LD object (dict, list, or @graph)."""
+    if isinstance(data, list):
+        for item in data:
+            found = _ld_author(item)
+            if found:
+                return found
+        return None
+    if not isinstance(data, dict):
+        return None
+    if "@graph" in data:
+        found = _ld_author(data["@graph"])
+        if found:
+            return found
+    author = data.get("author")
+    if isinstance(author, dict):
+        return _clean_name(author.get("name"))
+    if isinstance(author, list) and author:
+        names = [
+            a.get("name") if isinstance(a, dict) else a for a in author
+        ]
+        names = [_clean_name(n) for n in names]
+        names = [n for n in names if n]
+        if names:
+            return ", ".join(names)
+    if isinstance(author, str):
+        return _clean_name(author)
+    return None
+
+
+# "By Jane Smith" / "Reporting by Thomas Seythal and Christina Amann".
+# Note: no IGNORECASE — the name class must stay strictly capitalized so a
+# lowercase word like "and" cannot be swallowed into the captured name.
+_BYLINE_RE = re.compile(
+    r"(?:^|\n)\s*(?:[Rr]eporting\s+by|[Bb]y)\s+"
+    r"([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,3})"
+)
+
+
+def _byline_from_text(stripped_text: str) -> str | None:
+    """Last-resort byline: scan the cleaned text for a 'By <Name>' pattern."""
+    if not stripped_text:
+        return None
+    # Look near the top and bottom where bylines live.
+    window = stripped_text[:600] + "\n" + stripped_text[-600:]
+    m = _BYLINE_RE.search(window)
+    if m:
+        return _clean_name(m.group(1))
+    return None
+
+
+def _extract_author(soup) -> str | None:
+    """Best-effort author extraction across the common HTML conventions."""
+    # 1. <meta name="author"> / <meta property="article:author"> / NYT <meta name="byl">
+    for attrs in (
+        {"name": "author"},
+        {"property": "article:author"},
+        {"name": "byl"},
+        {"property": "og:article:author"},
+    ):
+        tag = soup.find("meta", attrs=attrs)
+        name = _clean_name(tag.get("content")) if tag else None
+        if name:
+            return name
+
+    # 2. rel="author" link/anchor.
+    rel = soup.find(attrs={"rel": lambda v: v and "author" in (v if isinstance(v, list) else [v])})
+    if rel:
+        name = _clean_name(rel.get_text(strip=True))
+        if name:
+            return name
+
+    # 3. JSON-LD (schema.org Article/NewsArticle).
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        raw = script.string or script.get_text() or ""
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        name = _ld_author(data)
+        if name:
+            return name
+
+    # 4. A byline-classed element.
+    byline = soup.find(attrs={"class": lambda c: c and "byline" in c.lower()})
+    if byline:
+        return _clean_name(byline.get_text(strip=True))
+
+    return None
+
+
 def _extract_metadata(html: str) -> tuple[str | None, str | None, str | None]:
     """Pull (title, author, published_date) from HTML via BeautifulSoup."""
     soup = BeautifulSoup(html or "", "lxml")
@@ -72,14 +174,7 @@ def _extract_metadata(html: str) -> tuple[str | None, str | None, str | None]:
     elif soup.title and soup.title.string:
         title = soup.title.string.strip()
 
-    author = None
-    meta_author = soup.find("meta", attrs={"name": "author"})
-    if meta_author and meta_author.get("content"):
-        author = meta_author["content"].strip()
-    else:
-        byline = soup.find(attrs={"class": lambda c: c and "byline" in c.lower()})
-        if byline:
-            author = byline.get_text(strip=True) or None
+    author = _extract_author(soup)
 
     published_date = None
     pub_meta = soup.find("meta", attrs={"property": "article:published_time"})
@@ -261,8 +356,11 @@ def fetch(
     # 7. Summarize (best-effort; may be None).
     summary = summarize(stripped_text, normalized)
 
-    # 8. Metadata.
+    # 8. Metadata. Fall back to a body-text byline when no structured author tag
+    #    is present (e.g. Reuters puts "Reporting by ..." in the article body).
     title, author, published_date = _extract_metadata(html)
+    if not author:
+        author = _byline_from_text(stripped_text)
 
     page_size_chars = len(stripped_text or "")
     source_tier = _source_tier(domain)
