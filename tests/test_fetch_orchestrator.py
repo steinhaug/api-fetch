@@ -1,6 +1,7 @@
 """Milestone 6 tests: fetch() orchestration, caching, return types, errors."""
 
 import hashlib
+import json
 import uuid
 
 import pytest
@@ -175,6 +176,52 @@ def test_return_type_text_plus_links(monkeypatch):
         assert c["summary"] is not None
         assert c["text"] is not None
         assert isinstance(c["links"], list) and len(c["links"]) > 0
+    finally:
+        _cleanup(url)
+
+
+def test_login_wall_logged_for_stub(monkeypatch, tmp_path):
+    """A short body with login markers writes a login_required.log entry."""
+    import config
+
+    logfile = tmp_path / "login.log"
+    monkeypatch.setattr(config, "LOGIN_WALL_LOG", str(logfile))
+
+    stub = (
+        "<html><body><h1>Sign in to continue</h1>"
+        "<form><input type='password' name='pw'></form>"
+        "<p>Subscribe to read this article.</p></body></html>"
+    )
+    url = _url()
+    _cleanup(url)
+    _mock_fetch(monkeypatch, html=stub)
+    try:
+        result = fo.fetch(url, return_type="text")
+        # Contract is untouched: still a normal, error-free response.
+        assert result["error"] is None
+        assert logfile.exists()
+        entry = json.loads(logfile.read_text(encoding="utf-8").strip())
+        assert entry["url"].endswith(url.split("/")[-1])
+        assert "password_field" in entry["markers"]
+    finally:
+        _cleanup(url)
+
+
+def test_login_wall_not_logged_for_full_article(monkeypatch, tmp_path):
+    """A full-length article is not flagged even if it mentions 'subscribe'."""
+    import config
+
+    logfile = tmp_path / "login.log"
+    monkeypatch.setattr(config, "LOGIN_WALL_LOG", str(logfile))
+
+    body = "<p>" + ("Real article sentence. " * 200) + "Subscribe to our newsletter.</p>"
+    html = f"<html><body><article>{body}</article></body></html>"
+    url = _url()
+    _cleanup(url)
+    _mock_fetch(monkeypatch, html=html)
+    try:
+        fo.fetch(url, return_type="text")
+        assert not logfile.exists()
     finally:
         _cleanup(url)
 

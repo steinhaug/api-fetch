@@ -168,3 +168,28 @@ JUNK_PATTERNS = [
 
 # Cap on link objects returned per fetch (after filtering + sorting).
 MAX_LINKS = 50
+
+# ── Login / auth-wall detection ─────────────────────────────────────────────
+# When a fetch returns a suspiciously small body AND the raw HTML carries
+# login/paywall markers, we log it so the operator can fix the Chrome session.
+# A fully rendered article is typically 4000–15000 chars; a stub/login wall is
+# usually under 2000 (see 03_overview_spec.md §5.3).
+LOGIN_STUB_MAX_CHARS = 2000
+LOGIN_WALL_MARKERS = [
+    "sign in",
+    "signin",
+    "log in",
+    "login",
+    "create an account",
+    "create a free account",
+    "subscribe",
+    "subscription",
+    "register to read",
+    "register to continue",
+    "metered",
+    "paywall",
+    "you have reached your",
+    "to continue reading",
+]
+# Path to the append-only log of suspected login walls (one JSON line each).
+LOGIN_WALL_LOG = os.path.join(os.path.dirname(__file__), "login_required.log")

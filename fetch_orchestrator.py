@@ -7,6 +7,7 @@ fetch failures come back as the full §4 error shape with `error` set.
 """
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -142,6 +143,51 @@ def _response_from_row(row: dict, url: str, return_type: str) -> dict:
     }
 
 
+def _detect_login_wall(html: str, page_size_chars: int) -> list[str] | None:
+    """Heuristic: does this look like a login/auth wall rather than content?
+
+    Triggers when the extracted body is short (< LOGIN_STUB_MAX_CHARS) AND the
+    raw HTML carries login/paywall markers, OR a password input is present on a
+    short page. Returns the list of matched markers, or None if it looks fine.
+
+    The length guard avoids false positives on full articles that merely host a
+    metered-paywall overlay on top of fully-delivered content (e.g. Reuters):
+    those have large bodies and are not flagged.
+    """
+    if page_size_chars >= config.LOGIN_STUB_MAX_CHARS:
+        return None
+    lowered = (html or "").lower()
+    matched = [m for m in config.LOGIN_WALL_MARKERS if m in lowered]
+    if 'type="password"' in lowered or "type='password'" in lowered:
+        matched.append("password_field")
+    return matched or None
+
+
+def _log_login_wall(url: str, domain: str, fetch_mode: str, reason: str,
+                    page_size_chars: int, is_premium: bool, markers: list[str]) -> None:
+    """Append one JSON line describing a suspected login wall to the log file."""
+    entry = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "url": url,
+        "domain": domain,
+        "fetch_mode": fetch_mode,
+        "fetch_mode_reason": reason,
+        "page_size_chars": page_size_chars,
+        "is_premium_source": is_premium,
+        "markers": markers,
+    }
+    try:
+        with open(config.LOGIN_WALL_LOG, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as exc:  # logging must never break a fetch
+        logger.warning("Could not write login-wall log: %s", exc)
+    logger.warning(
+        "Suspected login/auth wall on %s (%d chars, mode=%s, markers=%s). "
+        "Check the Chrome session.",
+        url, page_size_chars, fetch_mode, markers,
+    )
+
+
 def _error_response(url: str, return_type: str, reason: str) -> dict:
     """Full §4 error shape: every required field present, `error` set."""
     domain = domain_of(url)
@@ -221,6 +267,15 @@ def fetch(
     page_size_chars = len(stripped_text or "")
     source_tier = _source_tier(domain)
     is_premium = _is_premium(domain)
+
+    # 8b. Login/auth-wall detection — logged for the operator, does not alter
+    #     the response shape (the contract is immutable).
+    markers = _detect_login_wall(html, page_size_chars)
+    if markers:
+        _log_login_wall(
+            normalized, domain, fetch_mode, fetch_mode_reason,
+            page_size_chars, is_premium, markers,
+        )
 
     # 9. Persist (best-effort).
     try:
