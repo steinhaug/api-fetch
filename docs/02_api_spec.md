@@ -115,7 +115,10 @@ DB_POOL_SIZE = 5
 API_HOST    = "127.0.0.1"
 API_PORT    = 8765
 
-# Premium sources (require authenticated Playwright session)
+# Sites rendered via your own authenticated Chrome session.
+# These are login-gated or JS-heavy for you, so skip httpx and go
+# straight to Playwright using the profile you're already signed in to.
+# (is_premium_source in the return contract flags results from this list.)
 PREMIUM_SOURCES = [
     "washingtonpost.com",
     "nytimes.com",
@@ -299,7 +302,10 @@ Page content:
 
 ```
 1. Normalize parameters
-2. Compute query_hash = SHA-256 of (terms + date_from + date_to + sorted domains)
+2. Compute query_hash = SHA-256 of (terms + date_from + date_to + max_results + sorted domains + sorted exclude_domains)
+   — every parameter that changes the result set MUST be in the hash, or a
+   call with different max_results/exclude_domains will return a stale cached
+   result built for different parameters.
 3. Check searches table by query_hash
    If found AND cached_at > NOW() - CACHE_SEARCH_MAX_AGE:
      Return cached result

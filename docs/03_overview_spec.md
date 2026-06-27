@@ -50,7 +50,7 @@ Cached or stale data served without metadata means the model cannot know whether
 Enable Claude to research any topic — including content behind paywalls — using clean, source-attributed text, at a fraction of the token cost of raw web fetching.
 
 ### Secondary goals
-- Make research quality **deterministic**: same query, same sources, same structure — always.
+- Make research output **structurally stable**: same query returns the same response *shape* every time, so Claude never branches on format. (Content is not deterministic — Exa re-ranks over time, the web changes, summaries vary — and the spec does not pretend otherwise.)
 - Keep the API **invisible to Claude during use**: simple tool calls, structured responses, no parsing burden.
 - Make the cache **a research asset**: cached pages accumulate over time into a local knowledge base that can be queried across sessions.
 
@@ -65,15 +65,17 @@ Baseline comparison: fetching 5 articles raw vs. fetching 5 articles via WebFetc
 
 Expected result: 80-95% token reduction per article when using summary mode. Full text mode should still represent a significant reduction over raw HTML.
 
+> **`summary` is for triage, not for verification.** Use `summary` to decide which of N results are worth reading. Once a specific factual claim matters — "did X actually say Y?", exact figures, anything you'd quote or cross-reference — fetch `text` and reason from the source words, not from a Haiku paraphrase. Never settle a payoff claim on a summary alone.
+
 ### 5.2 Source quality
 > **Claude must be able to cross-reference a factual claim across tier1 sources without manual URL selection.**
 
 A `search()` call on any significant news event must return at least 2 tier1 sources in the result set. Claude can then `fetch()` those specifically and cross-reference.
 
-### 5.3 Authenticated access
-> **Premium sources (washingtonpost.com, nytimes.com, ft.com, wsj.com) must return full article text, not paywall pages.**
+### 5.3 Authenticated session access
+> **Sites you are already logged in to via your own Chrome profile must render their full content through that session, not a logged-out/JS-stub version.**
 
-Verified by comparing `page_size_chars` for a known premium article against the paywall-blocked response size. A paywall page is typically under 2,000 characters. A full article is typically 4,000–15,000 characters.
+This is your own authenticated browser, used for sites you have legitimate access to — the goal is full rendering of login-gated or JS-heavy pages, not circumventing access you don't have. Verified by comparing `page_size_chars` for a known article against a logged-out fetch of the same URL: the session version should be substantially larger (a stub/login wall is typically under 2,000 characters; a fully rendered article 4,000–15,000).
 
 ### 5.4 Freshness control
 > **Claude must be able to force a cache bypass for time-sensitive queries and receive content with explicit age metadata.**

@@ -180,16 +180,41 @@ external          — Outbound link to different domain, purpose unclear
 
 ## 4. Error responses
 
-Both functions return errors in-band (never raise exceptions to caller):
+Both functions return errors in-band (never raise exceptions to caller).
+
+An error response still carries **every required field** defined in §1/§2 —
+populated where known, `null` (or its typed equivalent) where not — plus a
+non-null `error` string. The `error` field is the only signal the caller
+branches on; the response *shape* never changes. This keeps the contract's
+"required fields always present, never omitted" rule true even on failure.
+
+Example — a failed `fetch()`:
 
 ```json
 {
   "url": "https://example.com/article",
-  "error": "fetch_failed: httpx 403, playwright timeout after 30s",
-  "content": null,
-  "cached": false
+  "domain": "example.com",
+  "title": null,
+  "published_date": null,
+  "author": null,
+  "fetch_mode": "playwright",
+  "cached": false,
+  "cached_at": null,
+  "cache_age_hours": null,
+  "page_size_chars": 0,
+  "return_type": "summary",
+  "content": { "summary": null, "text": null, "links": null },
+  "meta": {
+    "source_tier": "unknown",
+    "is_premium_source": false,
+    "fetch_mode_reason": "httpx_403"
+  },
+  "error": "fetch_failed: httpx 403, playwright timeout after 30s"
 }
 ```
+
+A failed `search()` follows the same principle: all §1 fields present,
+`results` as an empty array, `result_count` 0, and `error` set.
 
 Possible error strings:
 

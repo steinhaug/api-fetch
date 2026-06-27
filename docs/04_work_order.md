@@ -243,7 +243,7 @@ Implements `search(terms, date_from, date_to, max_results, domains, exclude_doma
 
 ### Logic:
 1. Normalize all parameters
-2. Compute `query_hash = SHA-256(terms + date_from + date_to + sorted(domains or []))`
+2. Compute `query_hash = SHA-256(terms + date_from + date_to + max_results + sorted(domains or []) + sorted(exclude_domains or []))` — include every parameter that changes the result set, or different `max_results`/`exclude_domains` will collide on a stale cache entry
 3. Check `searches` table — return cached result if within `CACHE_SEARCH_MAX_AGE` hours
 4. Call Exa main search:
    - `query = terms`
@@ -312,6 +312,7 @@ This is the main `fetch()` function that wires together all previous modules.
    - `published_date`: from `<meta property="article:published_time">` or `<time>` tag
 9. Write to `pages` table (upsert)
 10. Assemble and return response per `01_return_spec.md` section 2
+11. On `FetchError`: return the **full** response shape from `01_return_spec.md` §4 — every required field present (`null`/`0`/empty where unknown), `error` set to the failure reason. Do not return a minimal `{url, error, content}` dict; the contract shape must hold on failure too.
 
 ### return_type handling:
 ```
@@ -331,7 +332,8 @@ This is the main `fetch()` function that wires together all previous modules.
 - test_return_type_text: assert summary is null when return_type="text"
 - test_return_type_text_plus_links: assert all three content fields populated
 - test_error_response_structure: mock request_url to raise FetchError,
-  assert error field is set and content is null
+  assert error field is set, content fields are null, AND all required fields
+  from 01_return_spec.md §4 are present (no missing keys)
 ```
 
 ### Commit
@@ -392,7 +394,9 @@ Run the full pipeline end-to-end and verify all success criteria from `03_overvi
 ```
 [ ] search("Elon Musk Tesla") returns >= 2 tier1 sources
 [ ] fetch(reuters_url, return_type="summary") returns non-empty summary, no HTML tags in content
-[ ] fetch(washingtonpost_url) returns page_size_chars > 2000 (confirms paywall bypassed)
+[ ] fetch(auth_gated_url) via your logged-in session returns page_size_chars
+    substantially larger than a logged-out fetch of the same URL (confirms the
+    authenticated Chrome session is being used, not a logged-out stub)
 [ ] fetch(any_url, cache_reload=True) returns cached=False and fresh cached_at timestamp
 [ ] fetch(any_url) called twice: second call returns cached=True
 [ ] fetch(url, return_type="text+links") returns links with source_quality field
