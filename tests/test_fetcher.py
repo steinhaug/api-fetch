@@ -45,6 +45,37 @@ def test_premium_source_uses_playwright(monkeypatch):
     assert reason == "playwright_auth"
 
 
+def test_ensure_chrome_autolaunch(monkeypatch):
+    """_ensure_chrome launches the shortcut when CDP is down, then succeeds
+    once the port comes up — without requiring a real Chrome."""
+    calls = {"started": 0, "probes": 0}
+
+    def fake_ready():
+        calls["probes"] += 1
+        # Down on the first probe, up after the "launch".
+        return calls["started"] > 0
+
+    def fake_startfile(path):
+        calls["started"] += 1
+
+    monkeypatch.setattr(fetcher, "_cdp_ready", fake_ready)
+    monkeypatch.setattr(fetcher.os, "startfile", fake_startfile, raising=False)
+    monkeypatch.setattr(config, "CHROME_AUTOLAUNCH", True)
+    monkeypatch.setattr(config, "CHROME_LAUNCH_SHORTCUT", __file__)  # any existing file
+    monkeypatch.setattr(config, "CHROME_LAUNCH_WAIT_S", 3)
+    monkeypatch.setattr(config, "CHROME_LAUNCH_POLL_S", 0.01)
+
+    assert fetcher._ensure_chrome() is True
+    assert calls["started"] == 1
+
+
+def test_ensure_chrome_disabled(monkeypatch):
+    """With autolaunch off and CDP down, _ensure_chrome returns False."""
+    monkeypatch.setattr(fetcher, "_cdp_ready", lambda: False)
+    monkeypatch.setattr(config, "CHROME_AUTOLAUNCH", False)
+    assert fetcher._ensure_chrome() is False
+
+
 def test_fetch_error_on_bad_url():
     """A garbage URL that resolves nowhere raises FetchError."""
     with pytest.raises(FetchError):

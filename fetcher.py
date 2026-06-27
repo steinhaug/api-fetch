@@ -14,6 +14,9 @@ Flow per `02_api_spec.md` §4.2:
 """
 
 import logging
+import os
+import threading
+import time
 from urllib.parse import urlparse
 
 import httpx
@@ -21,6 +24,59 @@ import httpx
 import config
 
 logger = logging.getLogger(__name__)
+
+# Serializes on-demand Chrome launches so concurrent fetches don't spawn it twice.
+_chrome_launch_lock = threading.Lock()
+
+
+def _cdp_ready() -> bool:
+    """True if Chrome's CDP endpoint answers at the configured URL."""
+    try:
+        r = httpx.get(config.CHROME_CDP_URL + "/json/version", timeout=2)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _ensure_chrome() -> bool:
+    """Make sure Chrome's CDP is up, launching the shortcut on demand.
+
+    Returns True if CDP is (or becomes) reachable. If it is already up, returns
+    immediately. Otherwise — when CHROME_AUTOLAUNCH is set — launches
+    CHROME_LAUNCH_SHORTCUT (which carries the debug-port + profile flags) and
+    polls until the port answers or CHROME_LAUNCH_WAIT_S elapses.
+    """
+    if _cdp_ready():
+        return True
+    if not config.CHROME_AUTOLAUNCH:
+        return False
+
+    with _chrome_launch_lock:
+        # Another thread may have launched it while we waited for the lock.
+        if _cdp_ready():
+            return True
+        shortcut = config.CHROME_LAUNCH_SHORTCUT
+        if not os.path.exists(shortcut):
+            logger.warning("Chrome auto-launch shortcut not found: %s", shortcut)
+            return False
+        logger.info("CDP down — launching Chrome debug session: %s", shortcut)
+        try:
+            os.startfile(shortcut)  # Windows: resolves and runs the .lnk
+        except Exception as exc:
+            logger.warning("Failed to launch Chrome shortcut: %s", exc)
+            return False
+
+        deadline = time.time() + config.CHROME_LAUNCH_WAIT_S
+        while time.time() < deadline:
+            if _cdp_ready():
+                logger.info("Chrome CDP is up.")
+                return True
+            time.sleep(config.CHROME_LAUNCH_POLL_S)
+        logger.warning(
+            "Chrome did not expose CDP within %ss after launch.",
+            config.CHROME_LAUNCH_WAIT_S,
+        )
+        return False
 
 
 class FetchError(Exception):
@@ -89,6 +145,10 @@ def _fetch_playwright(url: str) -> str:
         from playwright.sync_api import TimeoutError as PWTimeoutError
     except ImportError as exc:  # pragma: no cover - playwright always installed
         raise FetchError(url, "playwright_unavailable") from exc
+
+    # Bring Chrome up on demand if its CDP port isn't already answering.
+    if not _ensure_chrome():
+        raise FetchError(url, "playwright_unavailable")
 
     with sync_playwright() as p:
         try:

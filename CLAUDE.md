@@ -174,6 +174,15 @@ with the server running and Chrome connected.
   → schema.org JSON-LD `author.name` → byline-classed element → body-text
   fallback (`By …` / `Reporting by …`). Reuters now yields a name from the body
   credits; WaPo/NYT from structured tags.
+- **On-demand Chrome launch** (`fetcher._ensure_chrome`). When a Playwright
+  fetch is needed and CDP (9222) isn't answering, the fetcher launches
+  `chrome-profile.lnk` (carries `--remote-debugging-port=9222` + the profile
+  `--user-data-dir`) and polls until the port is up (≤ `CHROME_LAUNCH_WAIT_S`,
+  20s). The operator no longer needs to keep a Chrome window open. Separate
+  profile dir = isolated instance, so it coexists with normal Chrome. Live-
+  verified: cold NYT fetch with Chrome closed auto-launched it and returned
+  17.1K chars via `playwright_auth` in ~29s (first call only; Chrome then stays
+  up and later calls are fast). Toggle with `config.CHROME_AUTOLAUNCH`.
 - **Reuters note**: a metered paywall overlay ("pay $10") can appear in the
   browser while the full article is still delivered in the DOM — we extract the
   complete text regardless. A *hard*-paywalled stub (short body, no end-marker)

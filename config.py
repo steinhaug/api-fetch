@@ -45,6 +45,17 @@ CHROME_DATA_DIR = _env("CHROME_DATA_DIR")
 PLAYWRIGHT_TIMEOUT_MS = 30000
 PLAYWRIGHT_WAIT_MS = 1500  # wait after page load for late JS
 
+# On-demand Chrome launch: when a Playwright fetch is needed and the CDP port is
+# not answering, the fetcher launches this shortcut (which carries the
+# --remote-debugging-port=9222 + --user-data-dir flags) and waits for the port
+# to come up. Lets the operator avoid keeping a Chrome window open permanently.
+CHROME_AUTOLAUNCH = True
+CHROME_LAUNCH_SHORTCUT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "chrome-profile.lnk"
+)
+CHROME_LAUNCH_WAIT_S = 20    # max seconds to wait for CDP after launching
+CHROME_LAUNCH_POLL_S = 0.5   # poll interval while waiting
+
 # ── httpx ───────────────────────────────────────────────────────────────────
 HTTPX_TIMEOUT_S = 15
 HTTPX_MIN_BODY_CHARS = 500  # below this, treat as empty/JS-only → Playwright
