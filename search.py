@@ -182,8 +182,17 @@ def search(
                     config.PREMIUM_SOURCES,
                     exclude_domains,
                 )
+            # The main search is required; its failure fails the call.
             main_results = main_future.result()
-            premium_results = premium_future.result() if premium_future else []
+            # The premium search is a best-effort enhancement — some Exa plans
+            # cannot includeDomains for premium sources (403 SOURCE_NOT_AVAILABLE).
+            # Swallow its failure and fall back to main results only.
+            premium_results = []
+            if premium_future:
+                try:
+                    premium_results = premium_future.result()
+                except Exception as exc:
+                    logger.warning("Premium Exa search failed (ignored): %s", exc)
     except Exception as exc:
         logger.warning("Exa search failed for %r: %s", terms, exc)
         return {

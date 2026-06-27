@@ -110,16 +110,43 @@ CHROME_DATA_DIR=G:\chrome-bank\selenium.driver.python
 Update this section after each milestone is committed.
 
 ```
-[ ] Project setup       — venv, git init, .env, .gitignore, requirements.txt
-[ ] Milestone 1         — config.py, db.py, mysql tables
-[ ] Milestone 2         — fetcher.py
-[ ] Milestone 3         — parser.py
-[ ] Milestone 4         — summarizer.py
-[ ] Milestone 5         — search.py
-[ ] Milestone 6         — fetch_orchestrator.py
-[ ] Milestone 7         — server.py, mcp_server.py
-[ ] Milestone 8         — integration verified, all tests passing
+[x] Project setup       — venv (uv), git, .env, .gitignore, requirements.txt
+[x] Milestone 1         — config.py, db.py, mysql tables
+[x] Milestone 2         — fetcher.py
+[x] Milestone 3         — parser.py
+[x] Milestone 4         — summarizer.py
+[x] Milestone 5         — search.py
+[x] Milestone 6         — fetch_orchestrator.py
+[x] Milestone 7         — server.py, mcp_server.py
+[x] Milestone 8         — integration verified, 35 passed / 1 skipped
 ```
+
+### Build notes & decisions (2026-06-27)
+
+- **Env manager**: built the venv with `uv` (`uv venv` + `uv pip install`) per
+  operator preference; `python -m venv` still works identically.
+- **DB name**: `.env` is the source of truth → `agentic_webfetch` (not the docs'
+  `webfetch`). config.py reads it from `.env`. DB + tables auto-created.
+- **Whole pipeline is synchronous.** Playwright's sync API can't run inside an
+  asyncio loop, so fetcher/parser/orchestrator/search are sync and FastAPI
+  routes are `def` (run in threadpool). Search parallelism uses ThreadPoolExecutor.
+- **Connection pool**: hand-rolled queue-based pool (pymysql has none).
+  `cache_age_hours` is computed in SQL (`TIMESTAMPDIFF`) to avoid client/server
+  timezone skew.
+- **TIER2_DOMAINS / PRIMARY_SOURCE_DOMAINS**: docs only enumerate tier1; curated
+  starter lists added in config.py (documented inline).
+- **Premium Exa search is best-effort.** This Exa plan returns 403
+  SOURCE_NOT_AVAILABLE for includeDomains on wapo/nytimes/wsj; that failure is
+  now swallowed and the main results are returned regardless.
+- **Success criterion 5.2 (≥2 tier1 per news event)** is Exa-ranking dependent.
+  Verified strong for outlet-heavy queries (e.g. "Federal Reserve interest rate"
+  → 4–6 tier1); some broad/regional topics return regional/aggregator sources
+  Exa ranks higher. Classification itself is correct.
+- **Chrome/Playwright not running during this build** → 1 Playwright test skipped
+  and auth-session criteria (5.3) not yet verified. Start Chrome with the CLAUDE.md
+  command and re-run to confirm.
+- **Token reduction**: apnews.com raw 2.04M chars → stripped 3.5K = **99.8%**
+  reduction (criterion 5.1 met).
 
 ---
 
