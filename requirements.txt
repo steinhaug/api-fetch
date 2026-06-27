@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+httpx
+playwright
+trafilatura
+beautifulsoup4
+lxml
+anthropic
+pymysql
+exa-py
+python-dotenv
+pytest
+pytest-asyncio
+mcp
