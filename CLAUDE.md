@@ -118,8 +118,11 @@ Update this section after each milestone is committed.
 [x] Milestone 5         — search.py
 [x] Milestone 6         — fetch_orchestrator.py
 [x] Milestone 7         — server.py, mcp_server.py
-[x] Milestone 8         — integration verified, 35 passed / 1 skipped
+[x] Milestone 8         — integration verified, all tests passing
+[x] Post-build          — login-wall logging, link-noise filter, byline extraction
 ```
+
+Test suite: **42 passed** (Chrome up → 0 skipped). Run: `pytest tests/ -v`.
 
 ### Build notes & decisions (2026-06-27)
 
@@ -142,11 +145,39 @@ Update this section after each milestone is committed.
   Verified strong for outlet-heavy queries (e.g. "Federal Reserve interest rate"
   → 4–6 tier1); some broad/regional topics return regional/aggregator sources
   Exa ranks higher. Classification itself is correct.
-- **Chrome/Playwright not running during this build** → 1 Playwright test skipped
-  and auth-session criteria (5.3) not yet verified. Start Chrome with the CLAUDE.md
-  command and re-run to confirm.
 - **Token reduction**: apnews.com raw 2.04M chars → stripped 3.5K = **99.8%**
   reduction (criterion 5.1 met).
+
+### Post-build enhancements (2026-06-27)
+
+Added after live testing against real premium articles. All verified end-to-end
+with the server running and Chrome connected.
+
+- **Auth-session (5.3) verified live.** NYT via `playwright_auth` → 17.3K chars;
+  WaPo opinion piece → full body (5.2K), ads stripped, encoding clean (0 U+FFFD,
+  em-dash/accents intact — the `�` seen in terminals is just Windows cp1252).
+- **Login/auth-wall logging** (`fetch_orchestrator._detect_login_wall`). When a
+  fetch returns a short body (< `LOGIN_STUB_MAX_CHARS`, 2000) AND the raw HTML
+  has login/paywall markers or a password field, one JSON line is appended to
+  `login_required.log` (project root, gitignored) + a server WARNING. Lets the
+  operator spot a dead Chrome/bugmenot session by domain. The length guard means
+  full articles behind *metered* overlays (Reuters delivers full HTML under a JS
+  paywall) are NOT flagged. Contract shape unchanged — log is a side channel.
+- **Link-noise filter** (`parser`). Drops empty-anchor links, in-page `#`
+  anchors, self-links, and same-domain nav/section pages (e.g. `/business/
+  autos-transportation`). Same-domain links kept only when article-like (a
+  date/id in the path or a ≥30-char slug); cross-domain links always kept. On a
+  Reuters article this cut 50 nav-filled links → 36 real cross-references.
+  Remaining stock-ticker links (digit codes) are a tolerated site-specific edge.
+- **Byline extraction** (`fetch_orchestrator._extract_author`). Order:
+  `meta[name=author]` → `article:author` → `meta[name=byl]` (NYT) → `rel=author`
+  → schema.org JSON-LD `author.name` → byline-classed element → body-text
+  fallback (`By …` / `Reporting by …`). Reuters now yields a name from the body
+  credits; WaPo/NYT from structured tags.
+- **Reuters note**: a metered paywall overlay ("pay $10") can appear in the
+  browser while the full article is still delivered in the DOM — we extract the
+  complete text regardless. A *hard*-paywalled stub (short body, no end-marker)
+  would instead trip the login-wall log above.
 
 ---
 
