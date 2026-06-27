@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "webfetch": {
+      "type": "stdio",
+      "command": "I:/agentic/api-fetch/venv/Scripts/python.exe",
+      "args": [
+        "I:/agentic/api-fetch/mcp_server.py"
+      ],
+      "env": {}
+    }
+  }
+}

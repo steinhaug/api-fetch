@@ -9,7 +9,10 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from this file's directory, not the process CWD — the MCP server is
+# spawned by Claude Code from an arbitrary working directory, so a bare
+# load_dotenv() would miss the credentials.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 
 def _env(key: str, default: str | None = None) -> str | None:

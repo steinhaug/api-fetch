@@ -5,6 +5,12 @@ the FastAPI server (server.py) must be running on API_BASE_URL before this MCP
 server starts. Run with:  python mcp_server.py
 """
 
+import os
+import sys
+
+# Ensure this project is importable when Claude Code spawns us from elsewhere.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import httpx
 
 import config
