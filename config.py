@@ -81,6 +81,13 @@ API_HOST = "127.0.0.1"
 API_PORT = 8765
 API_BASE_URL = f"http://{API_HOST}:{API_PORT}"
 
+# ── MCP server (HTTP transport) ─────────────────────────────────────────────
+# Used only when mcp_server.py is started with --http (streamable-http
+# transport). The default stdio transport ignores these. For Ngrok/remote POC,
+# bind 0.0.0.0; for local-only, keep 127.0.0.1. Endpoint path is /mcp.
+MCP_HTTP_HOST = _env("MCP_HTTP_HOST", "127.0.0.1")
+MCP_HTTP_PORT = int(_env("MCP_HTTP_PORT", "8766"))
+
 # ── Source lists ────────────────────────────────────────────────────────────
 # Sites rendered via the operator's own authenticated Chrome session: login or
 # JS gated, so httpx is skipped and Playwright drives the signed-in profile.

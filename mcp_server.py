@@ -86,4 +86,21 @@ if mcp is not None:
 if __name__ == "__main__":
     if mcp is None:
         raise SystemExit("mcp package not available")
-    mcp.run()
+
+    # Default: stdio (Claude Desktop / Claude Code spawn us this way).
+    # With --http: run the streamable-http transport on MCP_HTTP_HOST:PORT,
+    # endpoint /mcp — for Ngrok / remote / Chat custom-connector POCs.
+    # Same code, same tools, just a different transport. Both can run at once
+    # (stdio has no port; http binds MCP_HTTP_PORT). The backend (server.py,
+    # 8765) must be running either way — these tools proxy to it.
+    if "--http" in sys.argv:
+        mcp.settings.host = config.MCP_HTTP_HOST
+        mcp.settings.port = config.MCP_HTTP_PORT
+        print(
+            f"webfetch MCP (streamable-http) on "
+            f"http://{config.MCP_HTTP_HOST}:{config.MCP_HTTP_PORT}/mcp",
+            flush=True,
+        )
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run()
