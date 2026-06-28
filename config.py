@@ -87,6 +87,11 @@ API_BASE_URL = f"http://{API_HOST}:{API_PORT}"
 # bind 0.0.0.0; for local-only, keep 127.0.0.1. Endpoint path is /mcp.
 MCP_HTTP_HOST = _env("MCP_HTTP_HOST", "127.0.0.1")
 MCP_HTTP_PORT = int(_env("MCP_HTTP_PORT", "8766"))
+# FastMCP's DNS-rebinding protection rejects any Host header not in its allowlist
+# (defaults to localhost), which returns 421/400 when reached through an Ngrok
+# tunnel. For a POC behind Ngrok, allow any host. SECURITY: only do this for a
+# temporary tunnel — it removes the rebinding guard. Set to "1" to re-enable.
+MCP_HTTP_DNS_REBINDING_PROTECTION = _env("MCP_HTTP_DNS_REBINDING_PROTECTION", "0") == "1"
 
 # ── Source lists ────────────────────────────────────────────────────────────
 # Sites rendered via the operator's own authenticated Chrome session: login or

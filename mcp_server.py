@@ -96,6 +96,13 @@ if __name__ == "__main__":
     if "--http" in sys.argv:
         mcp.settings.host = config.MCP_HTTP_HOST
         mcp.settings.port = config.MCP_HTTP_PORT
+        # Allow the Ngrok (or other) Host header through FastMCP's DNS-rebinding
+        # guard, which otherwise returns 421/400 for non-localhost hosts.
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=config.MCP_HTTP_DNS_REBINDING_PROTECTION
+        )
         print(
             f"webfetch MCP (streamable-http) on "
             f"http://{config.MCP_HTTP_HOST}:{config.MCP_HTTP_PORT}/mcp",
