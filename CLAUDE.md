@@ -120,9 +120,16 @@ Update this section after each milestone is committed.
 [x] Milestone 7         — server.py, mcp_server.py
 [x] Milestone 8         — integration verified, all tests passing
 [x] Post-build          — login-wall logging, link-noise filter, byline extraction
+[x] HTTP MCP            — --http transport (streamable-http) + start-mcp-http.bat
+[x] task-20             — fetch contract redesign: verbosity/include_links, flat
+                          content+content_kind, token sizes, threshold short-circuit
 ```
 
-Test suite: **42 passed** (Chrome up → 0 skipped). Run: `pytest tests/ -v`.
+Test suite: **47 passed** (1 skipped when Chrome down). Run: `pytest tests/ -v`.
+
+task-20 verified live: short-circuit (small page → verbatim with no Haiku),
+summary↔full escalation via verbatim_size_tokens, include_links from cache (no
+re-fetch), reuters premium via playwright_auth.
 
 ### Build notes & decisions (2026-06-27)
 
