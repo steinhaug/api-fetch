@@ -40,7 +40,7 @@ Cached or stale data served without metadata means the model cannot know whether
 | Paywalled premium sources | Authenticated Chrome session handles login state transparently |
 | Cookie walls and JS-heavy pages | Playwright fallback via persistent Chrome profile |
 | Repeated fetches of same content | MySQL cache eliminates redundant network calls |
-| Summary vs full text decision | Claude chooses `return_type` — pays only for what it needs |
+| Summary vs full text decision | Claude chooses `verbosity`; short pages always deliver verbatim |
 
 ---
 
@@ -61,7 +61,7 @@ Enable Claude to research any topic — including content behind paywalls — us
 ### 5.1 Token efficiency
 > **A research session using WebFetch must consume fewer tokens than the equivalent session using raw web fetching.**
 
-Baseline comparison: fetching 5 articles raw vs. fetching 5 articles via WebFetch with `return_type=summary`.
+Baseline comparison: fetching 5 articles raw vs. fetching 5 articles via WebFetch with `verbosity="summary"`.
 
 Expected result: 80-95% token reduction per article when using summary mode. Full text mode should still represent a significant reduction over raw HTML.
 
@@ -103,13 +103,13 @@ Claude's workflow becomes:
    → 12 results, source_tier and published_date visible
    → Claude selects 2-3 tier1 results worth verifying
 
-2. fetch(reuters_url, return_type="text")
+2. fetch(reuters_url, verbosity="full")
    → Clean article text, no markup, author and date confirmed
 
-3. fetch(ft_url, return_type="text")
+3. fetch(ft_url, verbosity="full")
    → Cross-reference confirmed or contradicted
 
-4. fetch(sec_url, return_type="text+links")
+4. fetch(sec_url, verbosity="full", include_links=True)
    → Primary source with further document links if needed
 ```
 

@@ -67,14 +67,16 @@ async def unhandled_exception_handler(request, exc):
 @app.get("/fetch")
 def fetch_endpoint(
     url: str,
-    return_type: str = "summary",
+    verbosity: str = "summary",
+    include_links: bool = False,
     cache_reload: bool = False,
     max_age_hours: int = config.CACHE_DEFAULT_MAX_AGE,
 ):
-    """Fetch a URL and return cleaned content (see 01_return_spec.md §2)."""
+    """Fetch a URL and return cleaned content (see task-20 §2)."""
     return fetch_page(
         url=url,
-        return_type=return_type,
+        verbosity=verbosity,
+        include_links=include_links,
         cache_reload=cache_reload,
         max_age_hours=max_age_hours,
     )

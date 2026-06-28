@@ -188,6 +188,35 @@ with the server running and Chrome connected.
   complete text regardless. A *hard*-paywalled stub (short body, no end-marker)
   would instead trip the login-wall log above.
 
+### task-20: fetch contract redesign (2026-06-28) — BREAKING
+
+`docs/task-20-webfetch_change_request.md` is the **authoritative fetch contract
+now** and supersedes Doc 1 §2 (01_return_spec.md left untouched, but stale for
+fetch). Owner-sanctioned breaking change — whole stack is ours, no external
+consumer.
+
+- **`fetch()` signature**: `return_type` removed → two orthogonal axes
+  `verbosity` ("summary" | "full") + `include_links` (bool).
+- **Flat content**: `content.{summary,text,links}` gone. Now top-level `content`
+  (str|null) + load-bearing `content_kind` ("verbatim" = exact source, citable;
+  "summary" = Haiku paraphrase, triage only). `links` is top-level (null unless
+  `include_links`). `return_type` echo removed.
+- **Sizes always set**: `verbatim_size_chars` + `verbatim_size_tokens` (real
+  tiktoken `cl100k_base`, in `tokenizer.py`) reflect the FULL text even on a
+  summary, so Claude can budget an escalation. `truncated` (bool) — verbatim is
+  never truncated silently; true only if `VERBATIM_HARD_CAP_CHARS` (1M) is hit.
+- **Threshold short-circuit**: pages ≤ `SUMMARY_THRESHOLD_TOKENS` (2000) return
+  verbatim with NO Haiku call. So asking for "summary" on a short page returns
+  `content_kind="verbatim"` — that's the signal the short-circuit fired.
+- **DB**: `pages.page_size_tokens` column added via idempotent migration in
+  `init_db()`. Token count stored on the row; `db.update_page()` lazily
+  backfills tokens/summary on cache hits for old rows.
+- **include_links from cache**: reads `links_json`, never re-fetches.
+- **PREMIUM_SOURCES**: `reuters.com` added (httpx gets 401 → needs the session).
+  `is_premium_source` reframed as an *access-mechanism* flag, not credibility.
+- **search merge**: dedup never drops a premium hit for a thin highlight.
+- Tests: 47 passed / 1 skipped (Chrome down).
+
 ---
 
 ## What Not To Do

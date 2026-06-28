@@ -109,7 +109,13 @@ def _result_to_dict(r) -> dict:
 
 
 def _merge(main_results, premium_results) -> list[dict]:
-    """Merge main + premium results, dedup by (domain, lowercased title)."""
+    """Merge main + premium results, dedup by (domain, lowercased title).
+
+    Dedup is by domain+title only — never by highlight. A premium result with a
+    thin/empty Exa snippet still survives (task-20 §7.3): the highlight is triage
+    signal, not a quality filter, and on a premium source a thin highlight means
+    "the snippet is limited, fetch for the full article" (task-20 §6).
+    """
     merged: list[dict] = []
     seen: set[tuple[str, str]] = set()
 

@@ -32,19 +32,21 @@ def test_fetch_missing_url_returns_error():
 
 
 def test_response_matches_spec():
-    """A fetch response carries every required field from spec §2."""
+    """A fetch response carries every required field from task-20 §2."""
     resp = client.get(
-        "/fetch", params={"url": "https://example.com", "return_type": "text"}
+        "/fetch", params={"url": "https://example.com", "verbosity": "full"}
     )
     assert resp.status_code == 200
     data = resp.json()
     for field in (
-        "url", "domain", "title", "published_date", "author", "fetch_mode",
-        "cached", "cached_at", "cache_age_hours", "page_size_chars",
-        "return_type", "content", "meta", "error",
+        "url", "domain", "title", "published_date", "author", "content",
+        "content_kind", "verbatim_size_chars", "verbatim_size_tokens",
+        "truncated", "links", "fetch_mode", "cached", "cached_at",
+        "cache_age_hours", "meta", "error",
     ):
         assert field in data
-    for field in ("summary", "text", "links"):
-        assert field in data["content"]
+    assert data["content_kind"] in ("verbatim", "summary")
+    assert "return_type" not in data
+    assert not isinstance(data["content"], dict)
     for field in ("source_tier", "is_premium_source", "fetch_mode_reason"):
         assert field in data["meta"]

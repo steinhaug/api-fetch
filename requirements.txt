@@ -6,6 +6,7 @@ trafilatura
 beautifulsoup4
 lxml
 anthropic
+tiktoken
 pymysql
 exa-py
 python-dotenv

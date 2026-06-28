@@ -42,10 +42,21 @@ if mcp is not None:
         domains: list[str] = None,
         exclude_domains: list[str] = None,
     ) -> dict:
-        """Search the web and return ranked results with highlights.
+        """
+        Search the web; returns ranked results with source_tier, published_date,
+        and a relevance highlight per result. Cached.
 
-        Results are cached. Use date_from/date_to for time-sensitive queries.
-        Returns results with source_tier and published_date per result.
+        source_tier ("tier1"|"tier2"|"unknown") is your credibility axis — prefer
+        tier1 (wire services, papers of record, official/gov) for claims you'll
+        rely on. A significant news event returns >=2 tier1 sources so you can
+        cross-reference without hand-picking URLs.
+
+        is_premium_source=true means full text is retrievable via the authenticated
+        session — treat a thin highlight on such a result as "snippet is limited,
+        the article is not": fetch it to get the whole thing.
+
+        Use date_from/date_to to bound time-sensitive queries; domains /
+        exclude_domains to scope the result set.
         """
         return _get(
             "/search",
@@ -62,21 +73,43 @@ if mcp is not None:
     @mcp.tool()
     def fetch(
         url: str,
-        return_type: str = "summary",
+        verbosity: str = "summary",
+        include_links: bool = False,
         cache_reload: bool = False,
         max_age_hours: int = config.CACHE_DEFAULT_MAX_AGE,
     ) -> dict:
-        """Fetch a URL and return cleaned content.
+        """
+        Fetch one URL and return clean, source-attributed content.
 
-        return_type options: "summary", "text", "text+links".
-        Use cache_reload=True or a lower max_age_hours for breaking news.
-        Handles paywalled sites via the authenticated browser session.
+        Two independent controls:
+          verbosity="summary" (default) → 3-5 sentence summary. For triage:
+              deciding which results are worth reading. NOT citable as the source.
+          verbosity="full" → verbatim stripped article text. Cite from this.
+          include_links=True → also return high-quality outbound links (primary
+              sources, cross-references). Served from cache; never re-fetches.
+
+        Escalation ladder:
+          Every response carries verbatim_size_tokens — the FULL article's size —
+          even on a summary. Use it to decide whether a "full" fetch is worth the
+          tokens BEFORE paying for it.
+
+          Short pages short-circuit: if the article is <= ~2000 tokens you always
+          get content_kind="verbatim" (no summary step), because summarizing
+          something that small wastes a model call and loses fidelity for no gain.
+
+        ALWAYS check content_kind: "verbatim" = exact source text, safe to quote;
+        "summary" = paraphrase, triage only.
+
+        cache_reload=True or a lower max_age_hours forces fresh content for
+        breaking news / time-sensitive data. Paywalled/login-gated sources render
+        in full via the authenticated browser session.
         """
         return _get(
             "/fetch",
             {
                 "url": url,
-                "return_type": return_type,
+                "verbosity": verbosity,
+                "include_links": include_links,
                 "cache_reload": cache_reload,
                 "max_age_hours": max_age_hours,
             },

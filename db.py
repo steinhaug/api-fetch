@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS pages (
     links_json      JSON,
     summary         TEXT,
     page_size_chars INT UNSIGNED,
+    page_size_tokens INT UNSIGNED,
     fetch_mode      ENUM('httpx','playwright') NOT NULL,
     fetch_mode_reason VARCHAR(100) NOT NULL,
     source_tier     ENUM('tier1','tier2','unknown') NOT NULL DEFAULT 'unknown',
@@ -143,12 +144,28 @@ def get_connection():
         pool.release(conn)
 
 
+def _ensure_column(cur, table: str, column: str, ddl: str) -> None:
+    """Add `column` to `table` if absent (MySQL lacks ADD COLUMN IF NOT EXISTS)."""
+    cur.execute(
+        "SELECT COUNT(*) AS n FROM information_schema.columns "
+        "WHERE table_schema = %s AND table_name = %s AND column_name = %s",
+        (config.DB_NAME, table, column),
+    )
+    if cur.fetchone()["n"] == 0:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
 def init_db() -> None:
-    """Create the `pages` and `searches` tables if they do not exist."""
+    """Create the tables if absent and apply idempotent column migrations."""
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(_CREATE_PAGES)
             cur.execute(_CREATE_SEARCHES)
+            # Migration: token count for the verbatim-size contract (task-20).
+            _ensure_column(
+                cur, "pages", "page_size_tokens",
+                "page_size_tokens INT UNSIGNED AFTER page_size_chars",
+            )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -200,14 +217,14 @@ def upsert_page(data: dict) -> None:
         INSERT INTO pages (
             url, url_hash, domain, title, author, published_date,
             raw_html, stripped_text, links_json, summary, page_size_chars,
-            fetch_mode, fetch_mode_reason, source_tier, is_premium_source,
-            cached_at
+            page_size_tokens, fetch_mode, fetch_mode_reason, source_tier,
+            is_premium_source, cached_at
         ) VALUES (
             %(url)s, %(url_hash)s, %(domain)s, %(title)s, %(author)s,
             %(published_date)s, %(raw_html)s, %(stripped_text)s, %(links_json)s,
-            %(summary)s, %(page_size_chars)s, %(fetch_mode)s,
-            %(fetch_mode_reason)s, %(source_tier)s, %(is_premium_source)s,
-            NOW()
+            %(summary)s, %(page_size_chars)s, %(page_size_tokens)s,
+            %(fetch_mode)s, %(fetch_mode_reason)s, %(source_tier)s,
+            %(is_premium_source)s, NOW()
         )
         ON DUPLICATE KEY UPDATE
             url = VALUES(url),
@@ -220,6 +237,7 @@ def upsert_page(data: dict) -> None:
             links_json = VALUES(links_json),
             summary = VALUES(summary),
             page_size_chars = VALUES(page_size_chars),
+            page_size_tokens = VALUES(page_size_tokens),
             fetch_mode = VALUES(fetch_mode),
             fetch_mode_reason = VALUES(fetch_mode_reason),
             source_tier = VALUES(source_tier),
@@ -238,6 +256,7 @@ def upsert_page(data: dict) -> None:
         "links_json": links_json,
         "summary": data.get("summary"),
         "page_size_chars": data.get("page_size_chars"),
+        "page_size_tokens": data.get("page_size_tokens"),
         "fetch_mode": data.get("fetch_mode"),
         "fetch_mode_reason": data.get("fetch_mode_reason"),
         "source_tier": data.get("source_tier", "unknown"),
@@ -246,6 +265,25 @@ def upsert_page(data: dict) -> None:
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
+
+
+def update_page(url_hash: str, **fields) -> None:
+    """Update specific columns on a `pages` row without touching `cached_at`.
+
+    Used for lazy backfills (summary, token count) on cache hits. Only a small
+    whitelist of columns may be set, to keep this safe from arbitrary keys.
+    """
+    allowed = {"summary", "page_size_tokens", "links_json"}
+    cols = {k: v for k, v in fields.items() if k in allowed}
+    if not cols:
+        return
+    set_clause = ", ".join(f"{k} = %s" for k in cols)
+    params = list(cols.values()) + [url_hash]
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE pages SET {set_clause} WHERE url_hash = %s", params
+            )
 
 
 # ── Search cache ───────────────────────────────────────────────────────────────

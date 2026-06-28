@@ -1,9 +1,19 @@
 """The main fetch() function: wires fetcher, parser, summarizer, and cache.
 
 fetch() normalizes the URL, checks the page cache, retrieves and cleans the
-page, extracts metadata and links, summarizes, persists, and assembles the
-response defined in `01_return_spec.md` §2. It never raises to the caller:
-fetch failures come back as the full §4 error shape with `error` set.
+page, extracts metadata and links, decides verbatim-vs-summary, persists, and
+assembles the response defined in `docs/task-20-webfetch_change_request.md` §2
+(which supersedes Doc 1 §2 for fetch). It never raises to the caller: fetch
+failures come back as the full error shape with `error` set.
+
+Two orthogonal controls (task-20 §1):
+  verbosity      "summary" (default) | "full" — how much text.
+  include_links  bool — return outbound links (from cache) or not.
+
+Content is a single `content` field plus a load-bearing `content_kind`
+discriminator ("verbatim" = exact source text, safe to quote; "summary" =
+Haiku paraphrase, triage only). Pages at/under SUMMARY_THRESHOLD_TOKENS are
+returned verbatim without a Haiku call.
 """
 
 import hashlib
@@ -20,10 +30,11 @@ import db
 from fetcher import FetchError, domain_of, request_url
 from parser import extract_links, strip_markup
 from summarizer import summarize
+from tokenizer import count_tokens
 
 logger = logging.getLogger(__name__)
 
-VALID_RETURN_TYPES = ("summary", "text", "text+links")
+VALID_VERBOSITY = ("summary", "full")
 
 # Query-param keys stripped during normalization (tracking noise).
 _TRACKING_KEYS = {"fbclid", "gclid", "ref"}
@@ -190,16 +201,6 @@ def _extract_metadata(html: str) -> tuple[str | None, str | None, str | None]:
     return title, author, published_date
 
 
-def _content_block(return_type: str, summary, text, links) -> dict:
-    """Build the `content` block honoring the requested return_type."""
-    if return_type == "text":
-        return {"summary": None, "text": text, "links": None}
-    if return_type == "text+links":
-        return {"summary": summary, "text": text, "links": links}
-    # default + "summary"
-    return {"summary": summary, "text": None, "links": None}
-
-
 def _iso(value) -> str | None:
     """Render a datetime as ISO-8601 with Z, or pass through strings/None."""
     if value is None:
@@ -209,33 +210,126 @@ def _iso(value) -> str | None:
     return str(value)
 
 
-def _response_from_row(row: dict, url: str, return_type: str) -> dict:
-    """Assemble a response dict from a cached `pages` row."""
-    domain = row.get("domain") or domain_of(url)
-    summary = row.get("summary")
-    text = row.get("stripped_text")
-    links = row.get("links_json")
-    published = row.get("published_date")
+def _resolve_content(verbosity, verbatim_tokens, stripped_text, summary_cached, url):
+    """Decide content + content_kind per the threshold short-circuit (task-20 §3).
+
+    Returns `(content, content_kind, summary_to_persist, generated_summary)`.
+
+    - Pages at/under SUMMARY_THRESHOLD_TOKENS are always verbatim — the Haiku
+      call is skipped entirely.
+    - verbosity="full" is always verbatim.
+    - Otherwise a summary is returned; if none is cached it is generated now
+      (and flagged so the caller can backfill the row).
+    """
+    if verbatim_tokens <= config.SUMMARY_THRESHOLD_TOKENS:
+        return stripped_text, "verbatim", summary_cached, False
+    if verbosity == "full":
+        return stripped_text, "verbatim", summary_cached, False
+    # summary wanted on a long page
+    summary = summary_cached
+    generated = False
+    if summary is None:
+        summary = summarize(stripped_text, url)
+        generated = True
+    return summary, "summary", summary, generated
+
+
+def _apply_hard_cap(content, content_kind):
+    """Cap verbatim content at the hard safety limit. Returns (content, truncated).
+
+    Verbatim is never truncated silently; `truncated` is True only if the cap is
+    actually hit. Summaries are short and never capped.
+    """
+    if content_kind == "verbatim" and content and len(content) > config.VERBATIM_HARD_CAP_CHARS:
+        return content[: config.VERBATIM_HARD_CAP_CHARS], True
+    return content, False
+
+
+def _assemble(
+    *, url, domain, title, published_date, author, content, content_kind,
+    verbatim_size_chars, verbatim_size_tokens, truncated, links, fetch_mode,
+    cached, cached_at, cache_age_hours, source_tier, is_premium, fetch_mode_reason,
+) -> dict:
+    """Build the task-20 §2 response. Single shape for fresh + cached paths."""
     return {
-        "url": row.get("url") or url,
+        "url": url,
         "domain": domain,
-        "title": row.get("title"),
-        "published_date": str(published) if published else None,
-        "author": row.get("author"),
-        "fetch_mode": row.get("fetch_mode"),
-        "cached": True,
-        "cached_at": _iso(row.get("cached_at")),
-        "cache_age_hours": row.get("cache_age_hours"),
-        "page_size_chars": row.get("page_size_chars") or 0,
-        "return_type": return_type,
-        "content": _content_block(return_type, summary, text, links),
+        "title": title,
+        "published_date": published_date,
+        "author": author,
+        "content": content,
+        "content_kind": content_kind,
+        "verbatim_size_chars": verbatim_size_chars,
+        "verbatim_size_tokens": verbatim_size_tokens,
+        "truncated": truncated,
+        "links": links,
+        "fetch_mode": fetch_mode,
+        "cached": cached,
+        "cached_at": cached_at,
+        "cache_age_hours": cache_age_hours,
         "meta": {
-            "source_tier": row.get("source_tier") or _source_tier(domain),
-            "is_premium_source": bool(row.get("is_premium_source")),
-            "fetch_mode_reason": row.get("fetch_mode_reason"),
+            "source_tier": source_tier,
+            "is_premium_source": is_premium,
+            "fetch_mode_reason": fetch_mode_reason,
         },
         "error": None,
     }
+
+
+def _response_from_row(row, url, verbosity, include_links):
+    """Assemble a response from a cached `pages` row, applying task-20 logic.
+
+    Serves links from the stored `links_json` when `include_links` — never
+    re-fetches. Lazily generates/backfills a summary or token count if the
+    cached row predates this code or was never summarized.
+    """
+    domain = row.get("domain") or domain_of(url)
+    stripped_text = row.get("stripped_text") or ""
+    url_hash = row.get("url_hash")
+
+    verbatim_chars = row.get("page_size_chars")
+    if verbatim_chars is None:
+        verbatim_chars = len(stripped_text)
+    verbatim_tokens = row.get("page_size_tokens")
+    if verbatim_tokens is None:
+        verbatim_tokens = count_tokens(stripped_text)
+        if url_hash:
+            try:
+                db.update_page(url_hash, page_size_tokens=verbatim_tokens)
+            except Exception as exc:
+                logger.warning("Token backfill failed: %s", exc)
+
+    content, content_kind, summary_persist, generated = _resolve_content(
+        verbosity, verbatim_tokens, stripped_text, row.get("summary"), url
+    )
+    if generated and summary_persist is not None and url_hash:
+        try:
+            db.update_page(url_hash, summary=summary_persist)
+        except Exception as exc:
+            logger.warning("Summary backfill failed: %s", exc)
+
+    content, truncated = _apply_hard_cap(content, content_kind)
+    published = row.get("published_date")
+    return _assemble(
+        url=row.get("url") or url,
+        domain=domain,
+        title=row.get("title"),
+        published_date=str(published) if published else None,
+        author=row.get("author"),
+        content=content,
+        content_kind=content_kind,
+        verbatim_size_chars=verbatim_chars,
+        verbatim_size_tokens=verbatim_tokens,
+        truncated=truncated,
+        links=row.get("links_json") if include_links else None,
+        fetch_mode=row.get("fetch_mode"),
+        cached=True,
+        cached_at=_iso(row.get("cached_at")),
+        cache_age_hours=row.get("cache_age_hours"),
+        source_tier=row.get("source_tier") or _source_tier(domain),
+        is_premium=bool(row.get("is_premium_source")),
+        fetch_mode_reason=row.get("fetch_mode_reason"),
+    )
 
 
 def _detect_login_wall(html: str, page_size_chars: int) -> list[str] | None:
@@ -283,8 +377,8 @@ def _log_login_wall(url: str, domain: str, fetch_mode: str, reason: str,
     )
 
 
-def _error_response(url: str, return_type: str, reason: str) -> dict:
-    """Full §4 error shape: every required field present, `error` set."""
+def _error_response(url, verbosity, reason) -> dict:
+    """Full error shape: every required task-20 §2 field present, `error` set."""
     domain = domain_of(url)
     premium = _is_premium(domain)
     return {
@@ -293,13 +387,17 @@ def _error_response(url: str, return_type: str, reason: str) -> dict:
         "title": None,
         "published_date": None,
         "author": None,
+        "content": None,
+        # content is null; content_kind echoes the verbosity that was requested.
+        "content_kind": "verbatim" if verbosity == "full" else "summary",
+        "verbatim_size_chars": 0,
+        "verbatim_size_tokens": 0,
+        "truncated": False,
+        "links": None,
         "fetch_mode": "playwright" if premium or "playwright" in reason else "httpx",
         "cached": False,
         "cached_at": None,
         "cache_age_hours": None,
-        "page_size_chars": 0,
-        "return_type": return_type,
-        "content": {"summary": None, "text": None, "links": None},
         "meta": {
             "source_tier": _source_tier(domain),
             "is_premium_source": premium,
@@ -311,24 +409,26 @@ def _error_response(url: str, return_type: str, reason: str) -> dict:
 
 def fetch(
     url: str,
-    return_type: str = "summary",
+    verbosity: str = "summary",
+    include_links: bool = False,
     cache_reload: bool = False,
     max_age_hours: int = config.CACHE_DEFAULT_MAX_AGE,
 ) -> dict:
-    """Fetch a URL and return cleaned content per `01_return_spec.md` §2.
+    """Fetch a URL and return clean content per task-20 §2.
 
-    return_type is one of "summary", "text", "text+links". When `cache_reload`
-    is False and a cached page within `max_age_hours` exists, the cached content
-    is returned. All failures are returned in-band via the `error` field.
+    verbosity is "summary" (default, Haiku paraphrase — triage only) or "full"
+    (verbatim source text — citable). include_links adds outbound links from
+    cache. Short pages (<= SUMMARY_THRESHOLD_TOKENS) always return verbatim.
+    All failures are returned in-band via the `error` field.
     """
-    if return_type not in VALID_RETURN_TYPES:
-        return_type = "summary"
+    if verbosity not in VALID_VERBOSITY:
+        verbosity = "summary"
 
     normalized = normalize_url(url)
     url_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     domain = domain_of(normalized)
 
-    # 3. Cache check.
+    # Cache check.
     if not cache_reload:
         try:
             row = db.get_cached_page(url_hash)
@@ -338,44 +438,52 @@ def fetch(
         if row is not None:
             age = row.get("cache_age_hours")
             if age is not None and age <= max_age_hours:
-                return _response_from_row(row, normalized, return_type)
+                return _response_from_row(row, normalized, verbosity, include_links)
 
-    # 4. Retrieve.
+    # Retrieve.
     try:
         html, fetch_mode, fetch_mode_reason = request_url(normalized)
     except FetchError as exc:
-        return _error_response(normalized, return_type, exc.reason)
+        return _error_response(normalized, verbosity, exc.reason)
     except Exception as exc:
         logger.warning("Unexpected fetch error for %s: %s", normalized, exc)
-        return _error_response(normalized, return_type, str(exc))
+        return _error_response(normalized, verbosity, str(exc))
 
-    # 5/6. Clean + links.
+    # Clean + links.
     stripped_text, raw_links = strip_markup(html)
     link_objects = extract_links(normalized, raw_links)
 
-    # 7. Summarize (best-effort; may be None).
-    summary = summarize(stripped_text, normalized)
+    # Sizes — always computed on the FULL verbatim text, regardless of branch.
+    verbatim_chars = len(stripped_text or "")
+    verbatim_tokens = count_tokens(stripped_text)
 
-    # 8. Metadata. Fall back to a body-text byline when no structured author tag
-    #    is present (e.g. Reuters puts "Reporting by ..." in the article body).
+    # Content + content_kind via the threshold short-circuit. On a fresh fetch
+    # there is no cached summary, so a long-page summary request summarizes here;
+    # short pages skip Haiku entirely.
+    content, content_kind, summary_persist, _ = _resolve_content(
+        verbosity, verbatim_tokens, stripped_text, None, normalized
+    )
+    content, truncated = _apply_hard_cap(content, content_kind)
+
+    # Metadata. Fall back to a body-text byline when no structured author tag is
+    # present (e.g. Reuters puts "Reporting by ..." in the article body).
     title, author, published_date = _extract_metadata(html)
     if not author:
         author = _byline_from_text(stripped_text)
 
-    page_size_chars = len(stripped_text or "")
     source_tier = _source_tier(domain)
     is_premium = _is_premium(domain)
 
-    # 8b. Login/auth-wall detection — logged for the operator, does not alter
-    #     the response shape (the contract is immutable).
-    markers = _detect_login_wall(html, page_size_chars)
+    # Login/auth-wall detection — logged for the operator, never alters the shape.
+    markers = _detect_login_wall(html, verbatim_chars)
     if markers:
         _log_login_wall(
             normalized, domain, fetch_mode, fetch_mode_reason,
-            page_size_chars, is_premium, markers,
+            verbatim_chars, is_premium, markers,
         )
 
-    # 9. Persist (best-effort).
+    # Persist (best-effort). Always stores both size measures and the links so a
+    # later include_links request reads them from cache without re-fetching.
     try:
         db.upsert_page(
             {
@@ -388,8 +496,9 @@ def fetch(
                 "raw_html": html,
                 "stripped_text": stripped_text,
                 "links": link_objects,
-                "summary": summary,
-                "page_size_chars": page_size_chars,
+                "summary": summary_persist,
+                "page_size_chars": verbatim_chars,
+                "page_size_tokens": verbatim_tokens,
                 "fetch_mode": fetch_mode,
                 "fetch_mode_reason": fetch_mode_reason,
                 "source_tier": source_tier,
@@ -399,24 +508,23 @@ def fetch(
     except Exception as exc:
         logger.warning("Page cache write failed for %s: %s", normalized, exc)
 
-    # 10. Assemble fresh response.
-    return {
-        "url": normalized,
-        "domain": domain,
-        "title": title,
-        "published_date": published_date,
-        "author": author,
-        "fetch_mode": fetch_mode,
-        "cached": False,
-        "cached_at": _iso(datetime.now(timezone.utc)),
-        "cache_age_hours": 0.0,
-        "page_size_chars": page_size_chars,
-        "return_type": return_type,
-        "content": _content_block(return_type, summary, stripped_text, link_objects),
-        "meta": {
-            "source_tier": source_tier,
-            "is_premium_source": is_premium,
-            "fetch_mode_reason": fetch_mode_reason,
-        },
-        "error": None,
-    }
+    return _assemble(
+        url=normalized,
+        domain=domain,
+        title=title,
+        published_date=published_date,
+        author=author,
+        content=content,
+        content_kind=content_kind,
+        verbatim_size_chars=verbatim_chars,
+        verbatim_size_tokens=verbatim_tokens,
+        truncated=truncated,
+        links=link_objects if include_links else None,
+        fetch_mode=fetch_mode,
+        cached=False,
+        cached_at=_iso(datetime.now(timezone.utc)),
+        cache_age_hours=0.0,
+        source_tier=source_tier,
+        is_premium=is_premium,
+        fetch_mode_reason=fetch_mode_reason,
+    )

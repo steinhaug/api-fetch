@@ -34,6 +34,16 @@ HAIKU_MODEL = "claude-haiku-4-5-20251001"
 HAIKU_MAX_TOKENS = 512
 SUMMARY_MAX_INPUT_CHARS = 8000  # truncate stripped text before sending to Haiku
 
+# Threshold short-circuit (task-20): pages whose verbatim text is at/under this
+# token count are never summarized — they are returned verbatim. Summarizing
+# something this small wastes a model call and loses fidelity for no gain.
+SUMMARY_THRESHOLD_TOKENS = 2000
+
+# Hard safety cap on verbatim content length. Verbatim is never truncated
+# silently; `truncated=true` is set only if this cap is actually hit. Generous
+# on purpose — real articles never approach it; it only guards pathological input.
+VERBATIM_HARD_CAP_CHARS = 1_000_000
+
 # ── Cache TTL defaults (hours) ──────────────────────────────────────────────
 CACHE_DEFAULT_MAX_AGE = 24
 CACHE_NEWS_MAX_AGE = 6  # for tier1 news domains
@@ -94,14 +104,23 @@ MCP_HTTP_PORT = int(_env("MCP_HTTP_PORT", "8766"))
 MCP_HTTP_DNS_REBINDING_PROTECTION = _env("MCP_HTTP_DNS_REBINDING_PROTECTION", "0") == "1"
 
 # ── Source lists ────────────────────────────────────────────────────────────
-# Sites rendered via the operator's own authenticated Chrome session: login or
-# JS gated, so httpx is skipped and Playwright drives the signed-in profile.
-# `is_premium_source` in the return contract flags results from this list.
+# Sites whose full text is only retrievable via the operator's authenticated /
+# browser session: login- or JS-gated, so httpx is skipped and Playwright drives
+# the signed-in profile.
+#
+# `is_premium_source` (task-20 §6) is NOT a credibility signal — source_tier owns
+# that axis. It is an ACCESS-MECHANISM flag: true means "full text is reachable
+# via the authenticated session." In a search result that reads as "the snippet
+# is limited, not the article — worth fetching for the whole thing."
+#
+# reuters.com is included: httpx gets 401 on it (verified), so it genuinely needs
+# the browser session to render full content. wapo/nyt/ft/wsj are login-gated.
 PREMIUM_SOURCES = [
     "washingtonpost.com",
     "nytimes.com",
     "ft.com",
     "wsj.com",
+    "reuters.com",
 ]
 
 # tier1: wire services, major papers, and official/government sources.
