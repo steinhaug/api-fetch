@@ -190,10 +190,11 @@ with the server running and Chrome connected.
 
 ### task-20: fetch contract redesign (2026-06-28) — BREAKING
 
-`docs/task-20-webfetch_change_request.md` is the **authoritative fetch contract
-now** and supersedes Doc 1 §2 (01_return_spec.md left untouched, but stale for
-fetch). Owner-sanctioned breaking change — whole stack is ours, no external
-consumer.
+`docs/01_return_spec.md` remains the **authoritative return contract** — it was
+manually reconciled to this redesign, so 01 and the code now match.
+`docs/task-20-webfetch_change_request.md` is the **applied change request** that
+specified this owner-sanctioned breaking change (history/rationale), not a
+second source of truth. When in doubt, 01 wins.
 
 - **`fetch()` signature**: `return_type` removed → two orthogonal axes
   `verbosity` ("summary" | "full") + `include_links` (bool).
